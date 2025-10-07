@@ -13,6 +13,9 @@ import time
 import av
 import whisper_live.utils as utils
 
+import tkinter as tk
+from tkinter import scrolledtext
+
 
 class Client:
     """
@@ -230,9 +233,11 @@ class Client:
             return
 
         if "segments" in message.keys():
+            print("[DEBUG]: Received transcription segments.")  # Debugging line
             self.process_segments(message["segments"])
         
         if "translated_segments" in message.keys():
+            print("[DEBUG]: Received translated segments.")  # Debugging line
             self.process_segments(message["translated_segments"], translated=True)
 
     def on_error(self, ws, error):
@@ -635,23 +640,32 @@ class TranscriptionTeeClient:
             for _ in range(0, int(self.rate / self.chunk * self.record_seconds)):
                 if not any(client.recording for client in self.clients):
                     break
-                data = self.stream.read(self.chunk, exception_on_overflow=False)
+                try:
+                    data = self.stream.read(self.chunk, exception_on_overflow=False)
+                except Exception as e:
+                    print(f"[WARN] 录音线程捕获到异常: {e}")
+                    break
                 self.frames += data
-
                 audio_array = self.bytes_to_float_array(data)
-
-                self.multicast_packet(audio_array.tobytes())
-
-                # save frames if more than a minute
+                try:
+                    self.multicast_packet(audio_array.tobytes())
+                except Exception as e:
+                    print(f"[WARN] 录音线程发送音频异常: {e}")
+                    break
                 if len(self.frames) > 60 * self.rate:
                     if self.save_output_recording:
                         self.save_chunk(n_audio_file)
                         n_audio_file += 1
                     self.frames = b""
             self.write_all_clients_srt()
-
-        except KeyboardInterrupt:
-            self.finalize_recording(n_audio_file)
+        except Exception as e:
+            print(f"[WARN] 录音线程异常退出: {e}")
+        finally:
+            if self.stream:
+                self.stream.stop_stream()
+                self.stream.close()
+            if self.p:
+                self.p.terminate()
 
     def write_audio_frames_to_file(self, frames, file_name):
         """
@@ -812,6 +826,9 @@ class TranscriptionClient(TranscriptionTeeClient):
             translation_srt_file_path=translation_srt_file_path,
         )
 
+        # Ensure the transcription_callback is set to update the GUI
+        self.client.transcription_callback = self.update_transcription
+
         if save_output_recording and not output_recording_filename.endswith(".wav"):
             raise ValueError(f"Please provide a valid `output_recording_filename`: {output_recording_filename}")
         if not output_transcription_path.endswith(".srt"):
@@ -825,3 +842,82 @@ class TranscriptionClient(TranscriptionTeeClient):
             output_recording_filename=output_recording_filename,
             mute_audio_playback=mute_audio_playback
         )
+
+    def update_transcription(self, text, segments):
+        self.transcription_display.insert(tk.END, text + "\n")
+        self.transcription_display.see(tk.END)
+        print("[DEBUG]: Transcription updated in GUI.")  # Debugging line
+
+
+class TranscriptionGUI:
+    def __init__(self, *args, **kwargs):
+        self.client = None
+        self.recording_thread = None
+        self.root = tk.Tk()
+        self.root.title("WhisperLive Transcription")
+        self.start_button = tk.Button(self.root, text="Start Recording", command=self.start_recording)
+        self.start_button.pack(pady=10)
+        self.stop_button = tk.Button(self.root, text="Stop Recording", command=self.stop_recording, state=tk.DISABLED)
+        self.stop_button.pack(pady=10)
+        self.transcription_display = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, width=50, height=20)
+        self.transcription_display.pack(pady=10)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.waiting_for_server = False
+
+    def start_recording(self):
+        from whisper_live.client import TranscriptionClient
+        self.client = TranscriptionClient(
+            host="localhost",
+            port=9090
+        )
+        self.client.client.transcription_callback = self.update_transcription
+        orig_on_message = self.client.client.on_message
+        def patched_on_message(ws, message):
+            import json
+            msg = json.loads(message)
+            if msg.get("message") == "SERVER_READY":
+                self.waiting_for_server = False
+                self.transcription_display.insert(tk.END, "[服务器已就绪，请开始说话]\n")
+                self.client.client.recording = True
+            orig_on_message(ws, message)
+        self.client.client.on_message = patched_on_message
+        self.waiting_for_server = True
+        self.transcription_display.delete(1.0, tk.END)
+        self.transcription_display.insert(tk.END, "[正在连接服务器，请稍候...]\n")
+        self.recording_thread = threading.Thread(target=self.client)
+        self.recording_thread.start()
+        self.start_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
+
+    def stop_recording(self):
+        if self.client:
+            self.client.recording = False
+            self.stop_button.config(state=tk.DISABLED)
+            self.transcription_display.insert(tk.END, "Recording stopped. 连接已断开，等待下次录音...\n")
+            self.client.client.close_websocket()
+            self.start_button.config(state=tk.NORMAL)
+            self.client = None
+            self.recording_thread = None
+
+    def update_transcription(self, text, segments):
+        # 直接展示所有 segments 的 text 拼接
+        if segments:
+            full_text = "".join(seg["text"] for seg in segments)
+        else:
+            full_text = text
+        self.transcription_display.delete(1.0, tk.END)
+        self.transcription_display.insert(tk.END, full_text + "\n")
+        self.transcription_display.see(tk.END)
+        logging.info(f"Full transcript: {full_text}")
+        print("[DEBUG]: Transcription updated in GUI.")
+
+    def on_closing(self):
+        if self.client:
+            self.client.client.close_websocket()
+        self.root.destroy()
+
+# Example usage
+if __name__ == "__main__":
+    client = TranscriptionClient(host="localhost", port=9090)
+    gui = TranscriptionGUI()
+    gui.root.mainloop()

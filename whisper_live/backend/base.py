@@ -193,24 +193,9 @@ class ServeClientBase(object):
     def prepare_segments(self, last_segment=None):
         """
         Prepares the segments of transcribed text to be sent to the client.
-
-        This method compiles the recent segments of transcribed text, ensuring that only the
-        specified number of the most recent segments are included. It also appends the most
-        recent segment of text if provided (which is considered incomplete because of the possibility
-        of the last word being truncated in the audio chunk).
-
-        Args:
-            last_segment (str, optional): The most recent segment of transcribed text to be added
-                                          to the list of segments. Defaults to None.
-
-        Returns:
-            list: A list of transcribed text segments to be sent to the client.
+        This version returns ALL segments, not just the last N.
         """
-        segments = []
-        if len(self.transcript) >= self.send_last_n_segments:
-            segments = self.transcript[-self.send_last_n_segments:].copy()
-        else:
-            segments = self.transcript.copy()
+        segments = self.transcript.copy()
         if last_segment is not None:
             segments = segments + [last_segment]
         return segments
@@ -227,23 +212,19 @@ class ServeClientBase(object):
         """
         return input_bytes.shape[0] / self.RATE
 
-    def send_transcription_to_client(self, segments):
+    def send_transcription_to_client(self, segments, segment_id=None):
         """
         Sends the specified transcription segments to the client over the websocket connection.
-
-        This method formats the transcription segments into a JSON object and attempts to send
-        this object to the client. If an error occurs during the send operation, it logs the error.
-
-        Returns:
-            segments (list): A list of transcription segments to be sent to the client.
+        Optionally includes a segment_id for window tracking.
         """
         try:
-            self.websocket.send(
-                json.dumps({
-                    "uid": self.client_uid,
-                    "segments": segments,
-                })
-            )
+            payload = {
+                "uid": self.client_uid,
+                "segments": segments,
+            }
+            if segment_id is not None:
+                payload["segment_id"] = segment_id
+            self.websocket.send(json.dumps(payload))
         except Exception as e:
             logging.error(f"[ERROR]: Sending data to client: {e}")
 

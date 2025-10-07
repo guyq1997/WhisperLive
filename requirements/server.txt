@@ -21,3 +21,6 @@ openvino-genai
 openvino-tokenizers
 optimum 
 optimum-intel
+
+# torch for gpu
+#pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121

@@ -13,6 +13,7 @@ from websockets.sync.server import serve
 from websockets.exceptions import ConnectionClosed
 from whisper_live.vad import VoiceActivityDetector
 from whisper_live.backend.base import ServeClientBase
+import traceback
 
 logging.basicConfig(level=logging.INFO)
 
@@ -302,25 +303,26 @@ class TranscriptionServer:
             logging.info("New client connected")
             options = websocket.recv()
             options = json.loads(options)
-
+            logging.info(f"Received client options: {options}")
             self.use_vad = options.get('use_vad')
             if self.client_manager.is_server_full(websocket, options):
+                logging.info("Server full, closing client connection.")
                 websocket.close()
                 return False  # Indicates that the connection should not continue
-
             if self.backend.is_tensorrt():
                 self.vad_detector = VoiceActivityDetector(frame_rate=self.RATE)
             self.initialize_client(websocket, options, faster_whisper_custom_model_path,
                                    whisper_tensorrt_path, trt_multilingual, trt_py_session=trt_py_session)
+            logging.info("Client initialized successfully.")
             return True
         except json.JSONDecodeError:
             logging.error("Failed to decode JSON from client")
             return False
         except ConnectionClosed:
-            logging.info("Connection closed by client")
+            logging.info("Connection closed by client during initialization")
             return False
         except Exception as e:
-            logging.error(f"Error during new connection initialization: {str(e)}")
+            logging.error(f"Error during new connection initialization: {str(e)}\n{traceback.format_exc()}")
             return False
 
     def process_audio_frames(self, websocket):
@@ -426,19 +428,25 @@ class TranscriptionServer:
                 logging.info("Single model mode currently only works with custom models.")
         if not BackendType.is_valid(backend):
             raise ValueError(f"{backend} is not a valid backend type. Choose backend from {BackendType.valid_types()}")
-        with serve(
-            functools.partial(
-                self.recv_audio,
-                backend=BackendType(backend),
-                faster_whisper_custom_model_path=faster_whisper_custom_model_path,
-                whisper_tensorrt_path=whisper_tensorrt_path,
-                trt_multilingual=trt_multilingual,
-                trt_py_session=trt_py_session,
-            ),
-            host,
-            port
-        ) as server:
-            server.serve_forever()
+        try:
+            logging.info('Server main loop starting...')
+            with serve(
+                functools.partial(
+                    self.recv_audio,
+                    backend=BackendType(backend),
+                    faster_whisper_custom_model_path=faster_whisper_custom_model_path,
+                    whisper_tensorrt_path=whisper_tensorrt_path,
+                    trt_multilingual=trt_multilingual,
+                    trt_py_session=trt_py_session,
+                ),
+                host,
+                port
+            ) as server:
+                logging.info('Server serving forever...')
+                server.serve_forever()
+            logging.info('Server main loop exited normally.')
+        except Exception as e:
+            logging.error(f"Server main loop exception: {e}\n{traceback.format_exc()}")
 
     def voice_activity(self, websocket, frame_np):
         """

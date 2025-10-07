@@ -57,7 +57,12 @@ class ServeClientTensorRT(ServeClientBase):
             same_output_threshold,
         )
 
-        self.language = language if multilingual else "en"
+        if multilingual and language is None:
+            self.language = None
+        elif multilingual and language is not None:
+            self.language = language
+        else:
+            self.language = "en"
         self.task = task
         self.eos = False
         self.max_new_tokens = max_new_tokens
@@ -146,9 +151,12 @@ class ServeClientTensorRT(ServeClientBase):
             ServeClientTensorRT.SINGLE_MODEL_LOCK.acquire()
         logging.info(f"[WhisperTensorRT:] Processing audio with duration: {input_bytes.shape[0] / self.RATE}")
         mel, duration = self.transcriber.log_mel_spectrogram(input_bytes)
+        
+        prefix_language = f"<|{self.language}|>" if self.language else ""
+        
         last_segment = self.transcriber.transcribe(
             mel,
-            text_prefix=f"<|startoftranscript|><|{self.language}|><|{self.task}|><|notimestamps|>",
+            text_prefix=f"<|startoftranscript|>{prefix_language}<|{self.task}|><|notimestamps|>",
         )
         if ServeClientTensorRT.SINGLE_MODEL:
             ServeClientTensorRT.SINGLE_MODEL_LOCK.release()

@@ -22,7 +22,7 @@ class ServeClientFasterWhisper(ServeClientBase):
         device=None,
         language=None,
         client_uid=None,
-        model="small.en",
+        model="small",
         initial_prompt=None,
         vad_parameters=None,
         use_vad=True,
@@ -66,14 +66,18 @@ class ServeClientFasterWhisper(ServeClientBase):
         )
         self.cache_path = cache_path
         self.model_sizes = [
-            "tiny", "tiny.en", "base", "base.en", "small", "small.en",
-            "medium", "medium.en", "large-v2", "large-v3", "distil-small.en",
-            "distil-medium.en", "distil-large-v2", "distil-large-v3",
-            "large-v3-turbo", "turbo"
+            "tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en", "large", "large-v2", "large-v3"
         ]
+        # --- segment window tracking ---
+        self.segment_id = 0
+        self.last_first_start = None
+        self.last_send_time = time.time()
 
         self.model_size_or_path = model
-        self.language = "en" if self.model_size_or_path.endswith("en") else language
+        if language is None:
+            self.language = None
+        else:
+            self.language = "en" if self.model_size_or_path.endswith("en") else language
         self.task = task
         self.initial_prompt = initial_prompt
         self.vad_parameters = vad_parameters or {"onset": 0.5}
@@ -210,7 +214,8 @@ class ServeClientFasterWhisper(ServeClientBase):
             language=self.language,
             task=self.task,
             vad_filter=self.use_vad,
-            vad_parameters=self.vad_parameters if self.use_vad else None)
+            vad_parameters=self.vad_parameters if self.use_vad else None,
+            multilingual=True if self.language is None else False)
         if ServeClientFasterWhisper.SINGLE_MODEL:
             ServeClientFasterWhisper.SINGLE_MODEL_LOCK.release()
 
@@ -220,17 +225,14 @@ class ServeClientFasterWhisper(ServeClientBase):
 
     def handle_transcription_output(self, result, duration):
         """
-        Handle the transcription output, updating the transcript and sending data to the client.
-
-        Args:
-            result (str): The result from whisper inference i.e. the list of segments.
-            duration (float): Duration of the transcribed audio chunk.
+        Always send all segments to the client every 1 second, regardless of completed segment status.
         """
         segments = []
         if len(result):
             self.t_start = None
             last_segment = self.update_segments(result, duration)
             segments = self.prepare_segments(last_segment)
-
-        if len(segments):
-            self.send_transcription_to_client(segments)
+        now = time.time()
+        if now - self.last_send_time > 0.5 and len(segments):
+            self.send_transcription_to_client(segments, segment_id=0)
+            self.last_send_time = now

@@ -19,7 +19,7 @@ class ServeClientOpenVINO(ServeClientBase):
         device=None,
         language=None,
         client_uid=None,
-        model="small.en",
+        model="small",
         initial_prompt=None,
         vad_parameters=None,
         use_vad=True,
@@ -57,8 +57,11 @@ class ServeClientOpenVINO(ServeClientBase):
             clip_audio,
             same_output_threshold,
         )
-        self.language = "en" if language is None else language
-        if not self.language.startswith("<|"):
+        if language is None:
+            self.language = None
+        else:
+            self.language = "en" if language is None else language # This 'if language is None' is redundant now.
+        if not self.language.startswith("<|") and self.language is not None:
             self.language = f"<|{self.language}|>"
 
         self.task = "transcribe" if task is None else task
